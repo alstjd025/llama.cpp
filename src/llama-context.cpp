@@ -884,6 +884,8 @@ int llama_context::encode(const llama_batch & batch_inp) {
 }
 
 int llama_context::decode(const llama_batch & batch_inp) {
+    GGML_ASSERT((!batch_inp.token && batch_inp.embd) || (batch_inp.token && !batch_inp.embd)); // NOLINT
+
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(batch_inp);
@@ -911,8 +913,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const int64_t n_embd  = hparams.n_embd;
 
     const uint32_t n_tokens_all = batch.n_tokens;
-
-    GGML_ASSERT((!batch.token && batch.embd) || (batch.token && !batch.embd)); // NOLINT
 
     const uint32_t n_outputs_all = batch_allocr->get_n_outputs();
 
@@ -945,7 +945,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     llama_memory_state_ptr mstate;
 
     while (true) {
-        mstate = memory->init_batch(batch, cparams.n_ubatch, embd_all);
+        mstate = memory->init_batch(batch, batch_allocr.get(), cparams.n_ubatch, embd_all);
         if (!mstate) {
             return -2;
         }
@@ -1005,7 +1005,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
             if (n_outputs_all == n_tokens_all) {
                 n_outputs_new = ubatch.n_tokens;
             } else {
-                GGML_ASSERT(ubatch.output);
                 for (uint32_t i = 0; i < ubatch.n_tokens; i++) {
                     n_outputs_new += (int32_t) (ubatch.output[i] != 0);
                 }
@@ -1145,7 +1144,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     if (n_outputs > 0) {
         bool sorted_output = true;
 
-        auto & out_ids = mstate->out_ids();
+        auto & out_ids = batch_allocr->get_out_ids();
 
         GGML_ASSERT(out_ids.size() == (size_t) n_outputs);
 
@@ -2047,7 +2046,7 @@ void llama_context::opt_epoch_iter(
 
         uint32_t n_outputs_all = n_tokens_all;
 
-        auto mstate = memory->init_batch(batch, cparams.n_ubatch, true);
+        auto mstate = memory->init_batch(batch, nullptr, cparams.n_ubatch, true);
         if (!mstate || mstate->get_status() != LLAMA_MEMORY_STATUS_SUCCESS) {
             LLAMA_LOG_ERROR("%s: could not initialize batch\n", __func__);
             break;

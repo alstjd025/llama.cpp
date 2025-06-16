@@ -7,6 +7,8 @@
 
 struct llama_ubatch;
 
+class llama_batch_allocr;
+
 class llama_io_write_i;
 class llama_io_read_i;
 
@@ -71,7 +73,8 @@ struct llama_memory_i {
     // return a state object containing the ubatches and KV cache state required to process them
     // check the llama_memory_state_i::get_status() for the result
     virtual llama_memory_state_ptr init_batch(
-            const llama_batch & batch,
+            const llama_batch & batch, // TODO: remove
+            llama_batch_allocr * batch_allocr,
             uint32_t n_ubatch,
             bool embd_all) = 0;
 

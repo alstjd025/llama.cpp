@@ -359,7 +359,7 @@ llama_pos llama_kv_cache_recurrent::seq_pos_max(llama_seq_id seq_id) const {
     return result;
 }
 
-llama_memory_state_ptr llama_kv_cache_recurrent::init_batch(const llama_batch & batch, uint32_t n_ubatch, bool embd_all) {
+llama_memory_state_ptr llama_kv_cache_recurrent::init_batch(const llama_batch & batch, llama_batch_allocr * batch_allocr, uint32_t n_ubatch, bool embd_all) {
     auto sbatch = llama_sbatch(batch, hparams.n_embd, false);
 
     std::vector<llama_ubatch> ubatches;

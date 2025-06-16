@@ -58,6 +58,7 @@ public:
 
     llama_memory_state_ptr init_batch(
             const llama_batch & batch,
+            llama_batch_allocr * batch_allocr,
             uint32_t n_ubatch,
             bool embd_all) override;
 
@@ -286,6 +287,7 @@ private:
     // batch processing state
     //
 
+    // TODO: remove
     llama_sbatch sbatch;
 
     // the index of the next ubatch to process

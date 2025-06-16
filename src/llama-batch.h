@@ -2,12 +2,14 @@
 
 #include "llama.h"
 
+#include "llama-cparams.h"
+
 #include <array>
 #include <vector>
 #include <set>
+#include <bitset>
+#include <unordered_map>
 
-// very similar to llama_batch,
-// but has more metadata about sequences
 struct llama_ubatch {
     bool equal_seqs;
     // TODO: whole_seqs for embeddings?
@@ -19,11 +21,12 @@ struct llama_ubatch {
     llama_token  *  token;    // [n_tokens]
     float        *  embd;     // [n_embd, n_tokens]
     llama_pos    *  pos;      // [n_tokens]
-    int32_t      *  n_seq_id; // [n_seqs]
-    llama_seq_id ** seq_id;   // [n_seqs]
+    int32_t      *  n_seq_id; // [n_tokens]
+    llama_seq_id ** seq_id;   // [n_tokens]
     int8_t       *  output;   // [n_tokens]
 };
 
+// TODO: remove
 struct llama_sbatch_seq {
     int32_t n_seq_id;
 
@@ -34,6 +37,7 @@ struct llama_sbatch_seq {
 };
 
 // sequence-length-aware batch splitting
+// TODO: remove
 struct llama_sbatch {
     // tokens left in this batch
     size_t n_tokens;
@@ -78,7 +82,9 @@ struct llama_sbatch {
     llama_sbatch(const llama_batch & batch, size_t n_embd, bool simple_split = false);
 };
 
-// a helper for sanitizing and fulfilling a batch
+// ---------------------
+
+// a helper for sanitizing, fulfilling and splitting a batch
 class llama_batch_allocr {
 public:
     llama_batch_allocr();
@@ -93,13 +99,29 @@ public:
 
     const llama_batch & get_batch() const;
 
+    uint32_t get_n_tokens()  const;
     uint32_t get_n_outputs() const;
+
+    std::vector<int32_t> & get_out_ids();
 
     llama_pos seq_pos_min(llama_seq_id seq_id) const;
     llama_pos seq_pos_max(llama_seq_id seq_id) const;
 
+    void split_reset();
+
+    // simple split, unknown number of sequences of unequal lengths
+    llama_ubatch split_simple(uint32_t n_ubatch);
+
+    // make ubatches of equal-length sequences
+    llama_ubatch split_equal(uint32_t n_ubatch);
+
+    // sequence-wise split - each ubatch contains a single sequence
+    llama_ubatch split_seq(uint32_t n_ubatch);
+
 private:
     void clear();
+
+    void add_ubatch(llama_ubatch & res, const std::vector<int32_t> & idxs);
 
     llama_batch batch;
 
@@ -112,8 +134,36 @@ private:
     std::vector<llama_seq_id *> seq_id;
     std::vector<int8_t>         output;
 
-    std::vector<std::set<llama_pos>> seq_pos; // seq_pos[s]: the set of positions in sequence s
-    std::vector<std::vector<bool>>   seq_cpl; // seq_cpl[s0][s1]: if sequence s0 is coupled to sequence s1
+    using pos_set_t = std::set<llama_pos>;
+    using seq_cpl_t = std::vector<bool>;
+
+    std::vector<pos_set_t> seq_pos; // seq_pos[s]: the set of positions in sequence s
+    std::vector<seq_cpl_t> seq_cpl; // seq_cpl[s0][s1]: if sequence s0 is coupled to sequence s1
+
+    using idx_vec_t = std::vector<int32_t>;
+
+    using seq_set_t = std::bitset<LLAMA_MAX_SEQ>;
+
+    std::vector<seq_set_t> seq_set;
+    std::vector<idx_vec_t> seq_idx;
+
+    std::unordered_map<seq_set_t, idx_vec_t> seq_set_map;
+
+    // batch indices of the output
+    std::vector<int32_t> out_ids;
+
+    std::vector<bool> used;
+
+    struct ubatch {
+        std::vector<llama_token>    token;
+        std::vector<float>          embd;
+        std::vector<llama_pos>      pos;
+        std::vector<int32_t>        n_seq_id;
+        std::vector<llama_seq_id *> seq_id;
+        std::vector<int8_t>         output;
+    };
+
+    std::vector<ubatch> ubatches;
 
     int debug;
 };

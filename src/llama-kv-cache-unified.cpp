@@ -309,16 +309,26 @@ llama_pos llama_kv_cache_unified::seq_pos_max(llama_seq_id seq_id) const {
 
 llama_memory_state_ptr llama_kv_cache_unified::init_batch(
             const llama_batch & batch,
+            llama_batch_allocr * batch_allocr,
             uint32_t n_ubatch,
             bool embd_all) {
     GGML_UNUSED(embd_all);
 
     do {
+        // TODO: remove
         auto sbatch = llama_sbatch(batch, hparams.n_embd, true);
 
+        batch_allocr->split_reset();
+
         std::vector<llama_ubatch> ubatches;
-        while (sbatch.n_tokens > 0) {
-            ubatches.push_back(sbatch.split_simple(n_ubatch));
+        while (true) {
+            auto ubatch = batch_allocr->split_simple(n_ubatch);
+
+            if (ubatch.n_tokens == 0) {
+                break;
+            }
+
+            ubatches.push_back(std::move(ubatch));
         }
 
         auto heads = prepare(ubatches);
@@ -657,27 +667,22 @@ void llama_kv_cache_unified::apply_ubatch(uint32_t head_cur, const llama_ubatch 
         seq_pos_max_rm[s] = -1;
     }
 
-    for (uint32_t s = 0; s < ubatch.n_seqs; ++s) {
-        for (uint32_t j = 0; j < ubatch.n_seq_tokens; ++j) {
-            const uint32_t idx = s*ubatch.n_seq_tokens + j;
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        if (!cells.is_empty(head_cur + i)) {
+            assert(cells.seq_count(head_cur + i) == 1);
 
-            if (!cells.is_empty(head_cur + idx)) {
-                assert(cells.seq_count(head_cur + idx) == 1);
+            const llama_seq_id seq_id = cells.seq_get(head_cur + i);
+            const llama_pos    pos    = cells.pos_get(head_cur + i);
 
-                const llama_seq_id seq_id = cells.seq_get(head_cur + idx);
-                const llama_pos    pos    = cells.pos_get(head_cur + idx);
+            seq_pos_max_rm[seq_id] = std::max(seq_pos_max_rm[seq_id], pos);
 
-                seq_pos_max_rm[seq_id] = std::max(seq_pos_max_rm[seq_id], pos);
+            cells.rm(head_cur + i);
+        }
 
-                cells.rm(head_cur + idx);
-            }
+        cells.pos_set(head_cur + i, ubatch.pos[i]);
 
-            cells.pos_set(head_cur + idx, ubatch.pos[idx]);
-
-            // TODO: fix indexing [UBATCH_IDX]
-            for (int32_t i = 0; i < ubatch.n_seq_id[s]; i++) {
-                cells.seq_add(head_cur + idx, ubatch.seq_id[s][i]);
-            }
+        for (int32_t s = 0; s < ubatch.n_seq_id[i]; s++) {
+            cells.seq_add(head_cur + i, ubatch.seq_id[i][s]);
         }
     }
 
@@ -696,6 +701,7 @@ void llama_kv_cache_unified::apply_ubatch(uint32_t head_cur, const llama_ubatch 
             seq_rm(s, cells.seq_pos_min(s), seq_pos_max_rm[s] + 1);
         }
     }
+
     // move the head at the end of the slot
     head = head_cur + ubatch.n_tokens;
 }
@@ -792,9 +798,7 @@ ggml_tensor * llama_kv_cache_unified::cpy_v(ggml_context * ctx, ggml_tensor * v_
 }
 
 void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
-    const uint32_t n_tokens     = ubatch->n_tokens;
-    const uint32_t n_seq_tokens = ubatch->n_seq_tokens;
-    const uint32_t n_seqs       = ubatch->n_seqs;
+    const uint32_t n_tokens = ubatch->n_tokens;
 
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
     float * data = (float *) dst->data;
@@ -814,44 +818,40 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
     //      xxxxx-----
     // To visualize the mask, see https://github.com/ggml-org/llama.cpp/pull/12615
     for (uint32_t h = 0; h < 1; ++h) {
-        for (uint32_t s = 0; s < n_seqs; ++s) {
-            const llama_seq_id seq_id = ubatch->seq_id[s][0];
+        for (uint32_t b = 0; b < n_tokens; ++b) {
+            const llama_seq_id seq_id = ubatch->seq_id[b][0];
 
-            for (uint32_t j = 0; j < n_seq_tokens; ++j) {
-                const uint32_t idx = s*n_seq_tokens + j;
+            const llama_pos p1 = ubatch->pos[b];
 
-                const llama_pos p1 = ubatch->pos[idx];
+            for (uint32_t i = 0; i < n_kv; ++i) {
+                float f = 0.0f;
 
-                for (uint32_t i = 0; i < n_kv; ++i) {
-                    float f = 0.0f;
+                bool masked = false;
 
-                    bool masked = false;
+                if (cells.is_empty(i)) {
+                    masked = true;
+                } else {
+                    const llama_pos p0 = cells.pos_get(i);
 
-                    if (cells.is_empty(i)) {
-                        masked = true;
-                    } else {
-                        const llama_pos p0 = cells.pos_get(i);
+                    // mask the token if not the same sequence
+                    masked = masked || (!cells.seq_has(i, seq_id));
 
-                        // mask the token if not the same sequence
-                        masked = masked || (!cells.seq_has(i, seq_id));
+                    // mask future tokens
+                    masked = masked || (causal_attn && p0 > p1);
 
-                        // mask future tokens
-                        masked = masked || (causal_attn && p0 > p1);
+                    // apply SWA if any
+                    masked = masked || (is_masked_swa(p0, p1));
 
-                        // apply SWA if any
-                        masked = masked || (is_masked_swa(p0, p1));
-
-                        if (!masked && hparams.use_alibi) {
-                            f = -std::abs(p0 - p1);
-                        }
+                    if (!masked && hparams.use_alibi) {
+                        f = -std::abs(p0 - p1);
                     }
-
-                    if (masked) {
-                        f = -INFINITY;
-                    }
-
-                    data[h*(n_kv*n_tokens) + idx*n_kv + i] = f;
                 }
+
+                if (masked) {
+                    f = -INFINITY;
+                }
+
+                data[h*(n_kv*n_tokens) + b*n_kv + i] = f;
             }
         }
 
