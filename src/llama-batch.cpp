@@ -293,8 +293,6 @@ llama_batch_allocr::llama_batch_allocr() {
     for (auto & cur : seq_cpl) {
         cur.resize(LLAMA_MAX_SEQ);
     }
-
-    seq_idx.resize(LLAMA_MAX_SEQ);
 }
 
 bool llama_batch_allocr::init(
@@ -444,11 +442,6 @@ bool llama_batch_allocr::init(
         }
 
         seq_set.push_back(cur);
-
-        for (int32_t s = 0; s < batch.n_seq_id[i]; ++s) {
-            seq_idx[batch.seq_id[i][s]].push_back(i);
-        }
-
         seq_set_map[cur].push_back(i);
     }
 
@@ -561,7 +554,7 @@ bool llama_batch_allocr::init(
             for (int32_t s = 0; s < batch.n_seq_id[i]; ++s) {
                 const llama_seq_id seq_id = batch.seq_id[i][s];
 
-                cur_seq_set[seq_id] &= seq_set[seq_id];
+                cur_seq_set[seq_id] &= seq_set[i];
 
                 if (cur_seq_set[seq_id].none()) {
                     LLAMA_LOG_ERROR("%s: sequence %d belongs to incompatible sequence sets\n", __func__, seq_id);
@@ -778,10 +771,6 @@ void llama_batch_allocr::clear() {
     }
 
     seq_set.clear();
-
-    for (auto & cur : seq_idx) {
-        cur.clear();
-    }
 
     seq_set_map.clear();
 }

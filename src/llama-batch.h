@@ -143,11 +143,9 @@ private:
     std::vector<seq_cpl_t> seq_cpl; // seq_cpl[s0][s1]: if sequence s0 is coupled to sequence s1
 
     using idx_vec_t = std::vector<int32_t>;
-
     using seq_set_t = std::bitset<LLAMA_MAX_SEQ>;
 
     std::vector<seq_set_t> seq_set;
-    std::vector<idx_vec_t> seq_idx;
 
     std::unordered_map<seq_set_t, idx_vec_t> seq_set_map;
 
