@@ -26,64 +26,6 @@ struct llama_ubatch {
     int8_t       *  output;   // [n_tokens]
 };
 
-// TODO: remove
-struct llama_sbatch_seq {
-    int32_t n_seq_id;
-
-    llama_seq_id * seq_id;
-
-    size_t offset;
-    size_t length;
-};
-
-// sequence-length-aware batch splitting
-// TODO: remove
-struct llama_sbatch {
-    // tokens left in this batch
-    size_t n_tokens;
-
-    size_t n_embd;
-
-    // sorted indices into the batch
-    std::vector<int64_t> ids;
-    // batch indices of the output
-    std::vector<int64_t> out_ids;
-    std::vector<llama_sbatch_seq> seq;
-
-    const llama_batch * batch = nullptr;
-
-    // buffers for the ubatches
-    // TODO: very hacky, this needs a complete rework
-    struct ubatch_data {
-        std::vector<llama_token>    token;
-        std::vector<float>          embd;
-        std::vector<llama_pos>      pos;
-        std::vector<int32_t>        n_seq_id;
-        std::vector<llama_seq_id *> seq_id;
-        std::vector<int8_t>         output;
-    };
-
-    std::vector<ubatch_data> udatas;
-
-    llama_ubatch reserve_ubatch(size_t n_ubatch, bool has_embd = false);
-
-    void add_seq_to_ubatch(llama_ubatch & ubatch, llama_sbatch_seq & seq, size_t length);
-
-    // simple split, unknown number of sequences of unequal lengths
-    llama_ubatch split_simple(size_t n_ubatch);
-
-    // make batches of equal-length sequences
-    llama_ubatch split_equal(size_t n_ubatch);
-
-    // sequence-wise split
-    llama_ubatch split_seq(size_t n_ubatch);
-
-    llama_sbatch() = default;
-    llama_sbatch(const llama_batch & batch, size_t n_embd, bool simple_split = false);
-};
-
-// ---------------------
-
 // a helper for sanitizing, fulfilling and splitting a batch
 class llama_batch_allocr {
 public:

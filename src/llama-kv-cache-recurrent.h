@@ -133,7 +133,6 @@ public:
     llama_kv_cache_recurrent_state(
             llama_memory_status status,
             llama_kv_cache_recurrent * kv,
-            llama_sbatch sbatch,
             std::vector<llama_ubatch> ubatches);
 
     virtual ~llama_kv_cache_recurrent_state();
@@ -166,8 +165,6 @@ private:
     const llama_memory_status status;
 
     llama_kv_cache_recurrent * kv;
-
-    llama_sbatch sbatch;
 
     size_t i_next = 0;
 
