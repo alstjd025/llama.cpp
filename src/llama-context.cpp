@@ -722,22 +722,26 @@ llm_graph_result_ptr llama_context::process_ubatch(const llama_ubatch & ubatch, 
 }
 
 int llama_context::encode(const llama_batch & batch_inp) {
+    GGML_ASSERT((!batch_inp.token && batch_inp.embd) || (batch_inp.token && !batch_inp.embd)); // NOLINT
+
     if (batch_inp.n_tokens == 0) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
     }
 
+    const auto & hparams = model.hparams;
+
+    const int64_t n_embd = hparams.n_embd;
+
     // note: during encode, we always pass the full sequence starting from pos = 0
-    if (!batch_allocr->init(batch_inp, model.vocab, nullptr, true)) {
+    if (!batch_allocr->init(batch_inp, model.vocab, nullptr, n_embd, true)) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
 
-    const llama_batch & batch = batch_allocr->get_batch();
+    const uint32_t n_tokens = batch_allocr->get_n_tokens();
 
-    const uint32_t n_tokens = batch.n_tokens;
-
-    GGML_ASSERT((!batch.token && batch.embd) || (batch.token && !batch.embd)); // NOLINT
+    const llama_ubatch ubatch = batch_allocr->split_simple(n_tokens);
 
     // micro-batching is not possible for non-causal encoding, so we process the batch in a single shot
     GGML_ASSERT(cparams.n_ubatch >= n_tokens && "encoder requires n_ubatch >= n_tokens");
@@ -750,14 +754,6 @@ int llama_context::encode(const llama_batch & batch_inp) {
     embd_seq.clear();
 
     n_queued_tokens += n_tokens;
-
-    const auto & hparams = model.hparams;
-
-    const int64_t n_embd = hparams.n_embd;
-
-    llama_sbatch sbatch = llama_sbatch(batch, n_embd, /* simple_split */ true);
-
-    const llama_ubatch ubatch = sbatch.split_simple(n_tokens);
 
     // reserve output buffer
     if (output_reserve(n_tokens) < n_tokens) {
@@ -869,6 +865,8 @@ int llama_context::encode(const llama_batch & batch_inp) {
         cross.v_embd.resize(cross.n_embd*cross.n_enc);
         memcpy(cross.v_embd.data(), embd, ggml_nbytes(t_embd));
 
+        const auto & batch = batch_allocr->get_batch();
+
         // remember the sequence ids used during the encoding - needed for cross attention later
         cross.seq_ids_enc.resize(n_tokens);
         for (uint32_t i = 0; i < n_tokens; i++) {
@@ -896,24 +894,21 @@ int llama_context::decode(const llama_batch & batch_inp) {
         return -1;
     }
 
-    // when computing embeddings, all tokens are output
-    const bool embd_all = cparams.embeddings;
-
-    if (!batch_allocr->init(batch_inp, model.vocab, memory.get(), embd_all)) {
-        LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
-        return -1;
-    }
-
-    const llama_batch & batch = batch_allocr->get_batch();
-
     const auto & vocab   = model.vocab;
     const auto & hparams = model.hparams;
 
     const int32_t n_vocab = vocab.n_tokens();
     const int64_t n_embd  = hparams.n_embd;
 
-    const uint32_t n_tokens_all = batch.n_tokens;
+    // when computing embeddings, all tokens are output
+    const bool embd_all = cparams.embeddings;
 
+    if (!batch_allocr->init(batch_inp, vocab, memory.get(), n_embd, embd_all)) {
+        LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
+        return -1;
+    }
+
+    const uint32_t n_tokens_all  = batch_allocr->get_n_tokens();
     const uint32_t n_outputs_all = batch_allocr->get_n_outputs();
 
     if (embd_all) {
@@ -945,7 +940,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     llama_memory_state_ptr mstate;
 
     while (true) {
-        mstate = memory->init_batch(batch, batch_allocr.get(), cparams.n_ubatch, embd_all);
+        mstate = memory->init_batch(batch_allocr.get(), cparams.n_ubatch, embd_all);
         if (!mstate) {
             return -2;
         }
@@ -966,19 +961,19 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         did_optimize = true;
 
                         if (kv_self_update(true)) {
-                            LLAMA_LOG_DEBUG("%s: retrying batch size %d after cache optimization\n", __func__, batch.n_tokens);
+                            LLAMA_LOG_DEBUG("%s: retrying batch size %d after cache optimization\n", __func__, batch_allocr->get_n_tokens());
 
                             continue;
                         }
                     }
 
-                    LLAMA_LOG_WARN("%s: failed to find a memory slot for batch of size %d\n", __func__, batch.n_tokens);
+                    LLAMA_LOG_WARN("%s: failed to find a memory slot for batch of size %d\n", __func__, batch_allocr->get_n_tokens());
 
                     return 1;
                 }
             case LLAMA_MEMORY_STATUS_FAILED_COMPUTE:
                 {
-                    LLAMA_LOG_ERROR("%s: compute failed while preparing batch of size %d\n", __func__, batch.n_tokens);
+                    LLAMA_LOG_ERROR("%s: compute failed while preparing batch of size %d\n", __func__, batch_allocr->get_n_tokens());
 
                     return -2;
                 }
@@ -2038,7 +2033,12 @@ void llama_context::opt_epoch_iter(
             batch.logits  [pos_batch]    = true;
         }
 
-        const auto n_tokens_all = batch.n_tokens;
+        if (!batch_allocr->init(batch, model.vocab, nullptr, model.hparams.n_embd, true)) {
+            LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
+            return;
+        }
+
+        const uint32_t n_tokens_all = batch_allocr->get_n_tokens();
 
         n_queued_tokens += n_tokens_all;
 
@@ -2046,7 +2046,8 @@ void llama_context::opt_epoch_iter(
 
         uint32_t n_outputs_all = n_tokens_all;
 
-        auto mstate = memory->init_batch(batch, nullptr, cparams.n_ubatch, true);
+        // TODO: fix
+        auto mstate = memory->init_batch(batch_allocr.get(), cparams.n_ubatch, true);
         if (!mstate || mstate->get_status() != LLAMA_MEMORY_STATUS_SUCCESS) {
             LLAMA_LOG_ERROR("%s: could not initialize batch\n", __func__);
             break;

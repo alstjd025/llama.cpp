@@ -308,16 +308,12 @@ llama_pos llama_kv_cache_unified::seq_pos_max(llama_seq_id seq_id) const {
 }
 
 llama_memory_state_ptr llama_kv_cache_unified::init_batch(
-            const llama_batch & batch,
             llama_batch_allocr * batch_allocr,
             uint32_t n_ubatch,
             bool embd_all) {
     GGML_UNUSED(embd_all);
 
     do {
-        // TODO: remove
-        auto sbatch = llama_sbatch(batch, hparams.n_embd, true);
-
         batch_allocr->split_reset();
 
         std::vector<llama_ubatch> ubatches;
@@ -328,7 +324,7 @@ llama_memory_state_ptr llama_kv_cache_unified::init_batch(
                 break;
             }
 
-            ubatches.push_back(std::move(ubatch));
+            ubatches.push_back(std::move(ubatch)); // NOLINT
         }
 
         auto heads = prepare(ubatches);
@@ -337,7 +333,7 @@ llama_memory_state_ptr llama_kv_cache_unified::init_batch(
         }
 
         return std::make_unique<llama_kv_cache_unified_state>(
-                this, std::move(sbatch), std::move(heads), std::move(ubatches));
+                this, std::move(heads), std::move(ubatches));
     } while (false);
 
     return std::make_unique<llama_kv_cache_unified_state>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
@@ -1746,9 +1742,8 @@ llama_kv_cache_unified_state::llama_kv_cache_unified_state(
 
 llama_kv_cache_unified_state::llama_kv_cache_unified_state(
         llama_kv_cache_unified * kv,
-        llama_sbatch sbatch,
         llama_kv_cache_unified::ubatch_heads heads,
-        std::vector<llama_ubatch> ubatches) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), sbatch(std::move(sbatch)), heads(std::move(heads)), ubatches(std::move(ubatches)) {
+        std::vector<llama_ubatch> ubatches) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), heads(std::move(heads)), ubatches(std::move(ubatches)) {
 }
 
 llama_kv_cache_unified_state::~llama_kv_cache_unified_state() = default;
@@ -1779,12 +1774,6 @@ bool llama_kv_cache_unified_state::apply() {
     head = heads[i_next];
 
     return true;
-}
-
-std::vector<int64_t> & llama_kv_cache_unified_state::out_ids() {
-    assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
-
-    return sbatch.out_ids;
 }
 
 llama_memory_status llama_kv_cache_unified_state::get_status() const {

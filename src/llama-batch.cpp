@@ -301,10 +301,9 @@ bool llama_batch_allocr::init(
         const llama_batch & batch_inp,
         const llama_vocab & vocab,
         const llama_memory_i * memory,
-        bool embd_all) {
+        uint32_t n_embd,
+        bool output_all) {
     clear();
-
-    split_reset();
 
     batch = batch_inp;
 
@@ -382,7 +381,7 @@ bool llama_batch_allocr::init(
     }
 
     if (!batch.logits) {
-        if (embd_all) {
+        if (output_all) {
             // return the output for all tokens
             output.resize(batch.n_tokens, true);
         } else {
@@ -392,7 +391,7 @@ bool llama_batch_allocr::init(
         }
 
         batch.logits = output.data();
-    } else if (embd_all) {
+    } else if (output_all) {
         bool warn = false;
 
         for (int32_t i = 0; i < batch.n_tokens; ++i) {
@@ -416,6 +415,8 @@ bool llama_batch_allocr::init(
     for (int32_t i = 0; i < batch.n_tokens; ++i) {
         n_outputs += batch.logits[i] != 0;
     }
+
+    this->n_embd = n_embd;
 
     // determine coupled sequences
     // these are pairs of sequences that have at least one token in the input batch that is assigned to both of them
@@ -572,6 +573,8 @@ bool llama_batch_allocr::init(
 
     // TODO: check that positions are increasing
 
+    split_reset();
+
     return true;
 }
 
@@ -580,7 +583,7 @@ const llama_batch & llama_batch_allocr::get_batch() const {
 }
 
 uint32_t llama_batch_allocr::get_n_tokens() const {
-    return pos.size();
+    return batch.n_tokens;
 }
 
 uint32_t llama_batch_allocr::get_n_outputs() const {
@@ -609,40 +612,19 @@ void llama_batch_allocr::split_reset() {
 }
 
 llama_ubatch llama_batch_allocr::split_simple(uint32_t n_ubatch) {
-    llama_ubatch res {
-        /*.equal_seqs   =*/ false,
-        /*.n_tokens     =*/ 0,
-        /*.n_seq_tokens =*/ 1,
-        /*.n_seqs       =*/ 0,
-
-        /*.token        =*/ nullptr,
-        /*.embd         =*/ nullptr,
-        /*.pos          =*/ nullptr,
-        /*.n_seq_id     =*/ nullptr,
-        /*.seq_id       =*/ nullptr,
-        /*.output       =*/ nullptr
-    };
-
     uint32_t cur_idx = 0;
     while (cur_idx < used.size() && used[cur_idx]) {
         ++cur_idx;
     }
 
     if (cur_idx >= used.size()) {
-        return res;
+        return {};
     }
 
     std::vector<int32_t> idxs;
 
     while (true) {
-        res.n_tokens++;
-        res.n_seqs++;
-
         idxs.push_back(cur_idx);
-
-        if (output[cur_idx] != 0) {
-            out_ids.push_back(cur_idx);
-        }
 
         used[cur_idx] = true;
 
@@ -652,31 +634,15 @@ llama_ubatch llama_batch_allocr::split_simple(uint32_t n_ubatch) {
             break;
         }
 
-        if (res.n_tokens >= n_ubatch) {
+        if (idxs.size() >= n_ubatch) {
             break;
         }
     }
 
-    add_ubatch(res, idxs);
-
-    return res;
+    return add_ubatch(idxs, idxs.size(), false);
 }
 
 llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch) {
-    llama_ubatch res {
-        /*.equal_seqs   =*/ true,
-        /*.n_tokens     =*/ 0,
-        /*.n_seq_tokens =*/ 0,
-        /*.n_seqs       =*/ 0,
-
-        /*.token        =*/ nullptr,
-        /*.embd         =*/ nullptr,
-        /*.pos          =*/ nullptr,
-        /*.n_seq_id     =*/ nullptr,
-        /*.seq_id       =*/ nullptr,
-        /*.output       =*/ nullptr
-    };
-
     std::vector<seq_set_t> cur_seq_set;
 
     // determine the sequence sets participating in this ubatch
@@ -685,35 +651,45 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch) {
             continue;
         }
 
-        for (size_t s = 0; s < cur_seq_set.size(); ++s) {
-            // no overlap with existing sequence sets:
-            if ((cur_seq_set[s] & seq_set[i]).none()) {
-                cur_seq_set.push_back(seq_set[i]);
+        bool add = true;
 
-                if (cur_seq_set.size() > (size_t) n_ubatch) {
-                    break;
-                }
+        for (uint32_t s = 0; s < cur_seq_set.size(); ++s) {
+            // no overlap with existing sequence sets:
+            if (!(cur_seq_set[s] & seq_set[i]).none()) {
+                add = false;
+                break;
+            }
+        }
+
+        if (add) {
+            cur_seq_set.push_back(seq_set[i]);
+
+            if (cur_seq_set.size() > n_ubatch) {
+                break;
             }
         }
     }
 
-    res.n_seqs = cur_seq_set.size();
+    const uint32_t n_seqs = cur_seq_set.size();
 
-    std::vector<int32_t> cur_idx(cur_seq_set.size(), 0);
+    if (n_seqs == 0) {
+        return {};
+    }
 
-    for (size_t s = 0; s < cur_seq_set.size(); ++s) {
+    std::vector<int32_t> cur_idx(n_seqs, 0);
+
+    for (uint32_t s = 0; s < n_seqs; ++s) {
         while (used[seq_set_map[cur_seq_set[s]][cur_idx[s]]]) {
             ++cur_idx[s];
         }
     }
 
-    std::vector<int32_t> idxs;
+    std::vector<idx_vec_t> idxs_per_seq(n_seqs);
 
-    // TODO: reorder from 012301230123..., to 000...111...222...333...
     while (true) {
         bool can_expand = true;
 
-        for (size_t s = 0; s < cur_seq_set.size(); ++s) {
+        for (uint32_t s = 0; s < n_seqs; ++s) {
             if (cur_idx[s] >= (int32_t) seq_set_map[cur_seq_set[s]].size()) {
                 can_expand = false;
                 break;
@@ -724,53 +700,37 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch) {
             break;
         }
 
-        res.n_tokens += res.n_seqs;
-
-        for (size_t s = 0; s < cur_seq_set.size(); ++s) {
+        for (uint32_t s = 0; s < n_seqs; ++s) {
             const int32_t idx = seq_set_map[cur_seq_set[s]][cur_idx[s]];
-            idxs.push_back(idx);
-
-            if (output[idx] != 0) {
-                out_ids.push_back(idx);
-            }
+            idxs_per_seq[s].push_back(idx);
 
             used[idx] = true;
 
             ++cur_idx[s];
         }
 
-        if  (res.n_tokens + res.n_seqs > n_ubatch) {
+        if  ((idxs_per_seq[0].size() + 1)*n_seqs > n_ubatch) {
             break;
         }
     }
 
-    add_ubatch(res, idxs);
+    std::vector<int32_t> idxs;
 
-    return res;
+    for (uint32_t s = 0; s < n_seqs; ++s) {
+        idxs.insert(idxs.end(), idxs_per_seq[s].begin(), idxs_per_seq[s].end());
+    }
+
+    return add_ubatch(idxs, n_seqs, true);
 }
 
 llama_ubatch llama_batch_allocr::split_seq(uint32_t n_ubatch) {
-    llama_ubatch res {
-        /*.equal_seqs   =*/ true,
-        /*.n_tokens     =*/ 0,
-        /*.n_seq_tokens =*/ 0,
-        /*.n_seqs       =*/ 1,
-
-        /*.token        =*/ nullptr,
-        /*.embd         =*/ nullptr,
-        /*.pos          =*/ nullptr,
-        /*.n_seq_id     =*/ nullptr,
-        /*.seq_id       =*/ nullptr,
-        /*.output       =*/ nullptr,
-    };
-
     uint32_t cur_idx = 0;
     while (cur_idx < used.size() && used[cur_idx]) {
         ++cur_idx;
     }
 
     if (cur_idx >= used.size()) {
-        return res;
+        return {};
     }
 
     auto cur_seq_set = seq_set[cur_idx];
@@ -778,17 +738,11 @@ llama_ubatch llama_batch_allocr::split_seq(uint32_t n_ubatch) {
     std::vector<int32_t> idxs;
 
     while (true) {
-        res.n_tokens++;
-
         idxs.push_back(cur_idx);
-
-        if (output[cur_idx] != 0) {
-            out_ids.push_back(cur_idx);
-        }
 
         used[cur_idx] = true;
 
-        if (res.n_tokens >= n_ubatch) {
+        if (idxs.size() >= n_ubatch) {
             break;
         }
 
@@ -803,9 +757,7 @@ llama_ubatch llama_batch_allocr::split_seq(uint32_t n_ubatch) {
         cur_seq_set = seq_set[cur_idx];
     }
 
-    add_ubatch(res, idxs);
-
-    return res;
+    return add_ubatch(idxs, 1, true);
 }
 
 void llama_batch_allocr::clear() {
@@ -834,37 +786,60 @@ void llama_batch_allocr::clear() {
     seq_set_map.clear();
 }
 
-void llama_batch_allocr::add_ubatch(llama_ubatch & res, const std::vector<int32_t> & idxs) {
+llama_ubatch llama_batch_allocr::add_ubatch(const std::vector<int32_t> & idxs, uint32_t n_seqs, bool equal_seqs) {
+    const uint32_t n_tokens = idxs.size();
+
+    LLAMA_LOG_DEBUG("add_ubatch: n_tokens = %d, n_seqs = %d, equal_seqs = %d", n_tokens, n_seqs, equal_seqs);
+
+    assert(n_tokens%n_seqs == 0);
+
     ubatches.emplace_back();
 
     auto & ubatch = ubatches.back();
 
-    assert(res.n_tokens == idxs.size());
-
-    const auto n_tokens = res.n_tokens;
-
     ubatch.token.resize(n_tokens);
-    //ubatch.embd.resize(0); // TODO
+    ubatch.embd.resize((int64_t) n_tokens*n_embd);
     ubatch.pos.resize(n_tokens);
     ubatch.n_seq_id.resize(n_tokens);
     ubatch.seq_id.resize(n_tokens);
     ubatch.output.resize(n_tokens);
 
     for (size_t i = 0; i < idxs.size(); ++i) {
-        ubatch.token[i]    = batch.token[idxs[i]];
-        //ubatch.embd[i] = batch.embd[idxs[i]]; // TODO
+        if (batch.token) {
+            ubatch.token[i] = batch.token[idxs[i]];
+        }
+
+        if (batch.embd) {
+            memcpy(ubatch.embd.data() + i*n_embd, batch.embd + (int64_t) idxs[i]*n_embd, n_embd*sizeof(float));
+        }
+
         ubatch.pos[i]      = batch.pos[idxs[i]];
         ubatch.n_seq_id[i] = batch.n_seq_id[idxs[i]];
         ubatch.seq_id[i]   = batch.seq_id[idxs[i]];
         ubatch.output[i]   = batch.logits[idxs[i]];
+
+        if (ubatch.output[i]) {
+            out_ids.push_back(idxs[i]);
+        }
     }
 
-    res.token = ubatch.token.data();
-    //res.embd = ubatch.embd.data(); // TODO
-    res.pos = ubatch.pos.data();
-    res.n_seq_id = ubatch.n_seq_id.data();
-    res.seq_id = ubatch.seq_id.data();
-    res.output = ubatch.output.data();
+    llama_ubatch res {
+        /*.equal_seqs   =*/ equal_seqs,
+        /*.n_tokens     =*/ n_tokens,
+        /*.n_seq_tokens =*/ n_tokens/n_seqs,
+        /*.n_seqs       =*/ n_seqs,
+
+        /*.token        =*/ batch.token ? ubatch.token.data() : nullptr,
+        /*.embd         =*/ batch.embd ? ubatch.embd.data() : nullptr,
+        /*.pos          =*/ ubatch.pos.data(),
+        /*.n_seq_id     =*/ ubatch.n_seq_id.data(),
+        /*.seq_id       =*/ ubatch.seq_id.data(),
+        /*.output       =*/ ubatch.output.data(),
+    };
+
+    LLAMA_LOG_DEBUG("%s: added ubatch of size %d\n", __func__, res.n_tokens);
+
+    return res;
 }
 
 //

@@ -95,7 +95,8 @@ public:
             const llama_batch & batch_inp,
             const llama_vocab & vocab,
             const llama_memory_i * memory,
-            bool embd_all);
+            uint32_t n_embd,
+            bool output_all);
 
     const llama_batch & get_batch() const;
 
@@ -121,10 +122,11 @@ public:
 private:
     void clear();
 
-    void add_ubatch(llama_ubatch & res, const std::vector<int32_t> & idxs);
+    llama_ubatch add_ubatch(const std::vector<int32_t> & idxs, uint32_t n_seqs, bool equal_seqs);
 
     llama_batch batch;
 
+    uint32_t n_embd;
     uint32_t n_outputs;
 
     std::array<llama_seq_id, 1> seq_id_0 = { 0 }; // default sequence id
