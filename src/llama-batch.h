@@ -119,6 +119,7 @@ public:
     // sequence-wise split - each ubatch contains a single sequence
     llama_ubatch split_seq(uint32_t n_ubatch);
 
+    llama_ubatch reserve_one(uint32_t n_tokens);
 private:
     void clear();
 

@@ -1505,8 +1505,9 @@ bool llama_kv_cache_unified::state_read_meta(llama_io_read_i & io, uint32_t cell
 
         seq_rm(dest_seq_id, -1, -1);
 
-        llama_sbatch sbatch;
-        llama_ubatch ubatch = sbatch.reserve_ubatch(cell_count, /* has_embd */ false);
+        llama_batch_allocr batch_allocr;
+
+        llama_ubatch ubatch = batch_allocr.reserve_one(cell_count);
 
         ubatch.n_tokens = cell_count;
         ubatch.n_seq_tokens = cell_count;

@@ -571,6 +571,38 @@ bool llama_batch_allocr::init(
     return true;
 }
 
+llama_ubatch llama_batch_allocr::reserve_one(uint32_t n_tokens) {
+    clear();
+    split_reset();
+
+    ubatches.emplace_back();
+
+    auto & ubatch = ubatches.back();
+
+    ubatch.token   .resize(n_tokens);
+    ubatch.embd    .clear();
+    ubatch.pos     .resize(n_tokens);
+    ubatch.n_seq_id.resize(n_tokens);
+    ubatch.seq_id  .resize(n_tokens);
+    ubatch.output  .resize(n_tokens);
+
+    llama_ubatch res {
+        /*.equal_seqs   =*/ true,
+        /*.n_tokens     =*/ n_tokens,
+        /*.n_seq_tokens =*/ n_tokens,
+        /*.n_seqs       =*/ 1,
+
+        /*.token        =*/ ubatch.token.data(),
+        /*.embd         =*/ nullptr,
+        /*.pos          =*/ ubatch.pos.data(),
+        /*.n_seq_id     =*/ ubatch.n_seq_id.data(),
+        /*.seq_id       =*/ ubatch.seq_id.data(),
+        /*.output       =*/ ubatch.output.data(),
+    };
+
+    return res;
+}
+
 const llama_batch & llama_batch_allocr::get_batch() const {
     return batch;
 }
@@ -757,10 +789,11 @@ void llama_batch_allocr::clear() {
     n_outputs = 0;
 
     batch = {};
-    pos.clear();
+
+    pos     .clear();
     n_seq_id.clear();
-    seq_id.clear();
-    output.clear();
+    seq_id  .clear();
+    output  .clear();
 
     for (auto & cur : seq_pos) {
         cur.clear();
@@ -786,12 +819,12 @@ llama_ubatch llama_batch_allocr::add_ubatch(const std::vector<int32_t> & idxs, u
 
     auto & ubatch = ubatches.back();
 
-    ubatch.token.resize(n_tokens);
-    ubatch.embd.resize((int64_t) n_tokens*n_embd);
-    ubatch.pos.resize(n_tokens);
+    ubatch.token   .resize(n_tokens);
+    ubatch.embd    .resize((int64_t) n_tokens*n_embd);
+    ubatch.pos     .resize(n_tokens);
     ubatch.n_seq_id.resize(n_tokens);
-    ubatch.seq_id.resize(n_tokens);
-    ubatch.output.resize(n_tokens);
+    ubatch.seq_id  .resize(n_tokens);
+    ubatch.output  .resize(n_tokens);
 
     for (size_t i = 0; i < idxs.size(); ++i) {
         if (batch.token) {
@@ -839,25 +872,25 @@ struct llama_batch llama_batch_get_one(
              llama_token * tokens,
                  int32_t   n_tokens) {
     return {
-        /*n_tokens       =*/ n_tokens,
-        /*tokens         =*/ tokens,
-        /*embd           =*/ nullptr,
-        /*pos            =*/ nullptr,
-        /*n_seq_id       =*/ nullptr,
-        /*seq_id         =*/ nullptr,
-        /*logits         =*/ nullptr,
+        /*n_tokens =*/ n_tokens,
+        /*tokens   =*/ tokens,
+        /*embd     =*/ nullptr,
+        /*pos      =*/ nullptr,
+        /*n_seq_id =*/ nullptr,
+        /*seq_id   =*/ nullptr,
+        /*logits   =*/ nullptr,
     };
 }
 
 struct llama_batch llama_batch_init(int32_t n_tokens_alloc, int32_t embd, int32_t n_seq_max) {
     llama_batch batch = {
-        /*n_tokens       =*/ 0,
-        /*tokens         =*/ nullptr,
-        /*embd           =*/ nullptr,
-        /*pos            =*/ nullptr,
-        /*n_seq_id       =*/ nullptr,
-        /*seq_id         =*/ nullptr,
-        /*logits         =*/ nullptr,
+        /*n_tokens =*/ 0,
+        /*tokens   =*/ nullptr,
+        /*embd     =*/ nullptr,
+        /*pos      =*/ nullptr,
+        /*n_seq_id =*/ nullptr,
+        /*seq_id   =*/ nullptr,
+        /*logits   =*/ nullptr,
     };
 
     if (embd) {
