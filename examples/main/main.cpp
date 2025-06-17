@@ -6,6 +6,10 @@
 #include "llama.h"
 #include "chat.h"
 
+// Minsung
+// For arrayfire import test
+#include "tools/arrayfire/Arrayfire_wrapper.h"
+
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -89,6 +93,16 @@ int main(int argc, char ** argv) {
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MAIN, print_usage)) {
         return 1;
     }
+    
+    // Minsung
+    // Before start llama backend, initialize arrayfire
+    ArrayfireEnvironment arrayfire_env;
+    if(arrayfire_env.Init()){
+      std::cout << "Arrayfire initialized successfully." << "\n";
+    }
+
+
+
 
     common_init();
 
