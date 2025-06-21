@@ -8,7 +8,7 @@
 
 // Minsung
 // For arrayfire import test
-#include "tools/arrayfire/Arrayfire_wrapper.h"
+#include "Arrayfire_wrapper.h"
 
 #include <cstdio>
 #include <cstring>

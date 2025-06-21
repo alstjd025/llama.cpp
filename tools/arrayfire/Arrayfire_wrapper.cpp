@@ -3,7 +3,7 @@
   This file is part of the mzCache project.
 */
 
-#include <Arrayfire_wrapper.h>
+#include "Arrayfire_wrapper.h"
 
 ArrayfireEnvironment::ArrayfireEnvironment() {
   af::setDevice(0);

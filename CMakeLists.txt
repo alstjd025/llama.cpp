@@ -163,6 +163,10 @@ endif()
 #
 
 add_subdirectory(src)
+## Minsung
+## For Arrayfire 
+add_subdirectory(${CMAKE_SOURCE_DIR}/tools/arrayfire)
+
 
 #
 # utils, programs, examples and tests

@@ -8,7 +8,7 @@
 */
 
 // Includes
-#include <arrayfire.h>
+#include "arrayfire.h"
 #include <iostream>
 
 
