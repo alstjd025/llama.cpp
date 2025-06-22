@@ -7,7 +7,6 @@
 
 
 # llama.cpp/examples/main/CMakeLists.txt
-
 add_executable(llama-cli
     main.cpp
 )
